@@ -43,13 +43,17 @@ from watermarking_method import (
 )
 from add_after_eof import AddAfterEOF
 
+from iman_wm import ImanWM
+
 # --------------------
 # Method registry
 # --------------------
 
 METHODS: Dict[str, WatermarkingMethod] = {
     AddAfterEOF.name: AddAfterEOF(),
+    ImanWM.name: ImanWM(),
 }
+
 """Registry of available watermarking methods.
 
 Keys are human-readable method names (stable, lowercase, hyphenated)
