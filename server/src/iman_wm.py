@@ -41,7 +41,7 @@ class ImanWM(WatermarkingMethod):
         # Applicable if PyMuPDF can open the PDF and it is not password-protected
         try:
             doc = fitz.open(stream=load_pdf_bytes(pdf), filetype="pdf")
-            ok = not doc.needs_pass
+            ok = (not doc.needs_pass) and doc.page_count > 0
             doc.close()
             return ok
         except Exception:
