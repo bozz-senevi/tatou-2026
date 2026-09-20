@@ -68,7 +68,7 @@ class ImanWM(WatermarkingMethod):
             doc.update_stream(xref, payload, new=True)
             # 2. link it from the catalog so it is part of the document
             doc.xref_set_key(doc.pdf_catalog(), self._CATALOG_KEY, f"{xref} 0 R")
-            return doc.tobytes()
+            return doc.tobytes(no_new_id=True)
         finally:
             doc.close()
 
