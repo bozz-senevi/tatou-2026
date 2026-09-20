@@ -1,7 +1,11 @@
 """iman_wm.py
 
-Fingerprinting watermark. The recipient ID (the "secret") is stored inside
-the PDF as an extra object, together with an HMAC computed from the key.
+Fingerprinting watermark. The recipient ID (the "secret") is stored in TWO
+independent places inside the PDF, each together with an HMAC made from the
+key:
+  1. an extra stream object linked from the document catalog
+  2. a custom entry in the Info (metadata) dictionary
+read_secret tries both, so removing one location does not remove the mark.
 Without the key, nobody can create or change a mark that passes the check.
 """
 from __future__ import annotations
@@ -27,18 +31,19 @@ from watermarking_method import (
 class ImanWM(WatermarkingMethod):
     name: Final[str] = "iman-wm"
 
-    # Name of the entry we add to the PDF catalog to point at our object
-    _CATALOG_KEY: Final[str] = "ImanWM"
+    _CATALOG_KEY: Final[str] = "ImanWM"   # entry in the catalog -> our object
+    _INFO_KEY: Final[str] = "ImanWM"      # entry in the Info dictionary
     # Mixed into the HMAC so this method's marks can't be reused elsewhere
     _CONTEXT: Final[bytes] = b"wm:iman-wm:v1:"
 
     @staticmethod
     def get_usage() -> str:
-        return ("Stores the secret plus an HMAC (made with the key) in an extra "
-                "PDF object linked from the catalog. Position is ignored.")
+        return ("Stores the secret plus an HMAC (made with the key) in two "
+                "places: an extra PDF object linked from the catalog and a "
+                "custom Info-dictionary entry. Position is ignored.")
 
     def is_watermark_applicable(self, pdf: PdfSource, position: str | None = None) -> bool:
-        # Applicable if PyMuPDF can open the PDF and it is not password-protected
+        # Applicable if PyMuPDF can open the PDF, it has pages, and it is not password-protected
         try:
             doc = fitz.open(stream=load_pdf_bytes(pdf), filetype="pdf")
             ok = (not doc.needs_pass) and doc.page_count > 0
@@ -62,12 +67,9 @@ class ImanWM(WatermarkingMethod):
             if doc.needs_pass:
                 raise WatermarkingError("PDF is password-protected")
             payload = self._build_payload(secret, key)
-            # 1. create a new empty object and put the payload in its stream
-            xref = doc.get_new_xref()
-            doc.update_object(xref, "<<>>")
-            doc.update_stream(xref, payload, new=True)
-            # 2. link it from the catalog so it is part of the document
-            doc.xref_set_key(doc.pdf_catalog(), self._CATALOG_KEY, f"{xref} 0 R")
+            self._write_catalog(doc, payload)
+            self._write_info(doc, payload)
+            # no_new_id keeps the output deterministic (same input -> same bytes)
             return doc.tobytes(no_new_id=True)
         finally:
             doc.close()
@@ -82,18 +84,77 @@ class ImanWM(WatermarkingMethod):
         except Exception as exc:
             raise WatermarkingError("Could not open PDF") from exc
         try:
-            kind, value = doc.xref_get_key(doc.pdf_catalog(), self._CATALOG_KEY)
-            if kind != "xref":
-                raise SecretNotFoundError("No iman-wm watermark found")
-            payload = doc.xref_stream(int(value.split()[0]))
-            if not payload:
-                raise SecretNotFoundError("Watermark object is empty")
-            return self._check_payload(payload, key)
+            last_error: Exception | None = None
+            # Try each hiding place; the first one that verifies wins
+            for reader in (self._read_catalog, self._read_info):
+                payload = reader(doc)
+                if payload is None:
+                    continue
+                try:
+                    return self._check_payload(payload, key)
+                except (InvalidKeyError, SecretNotFoundError) as exc:
+                    last_error = exc
+            if last_error is not None:
+                raise last_error
+            raise SecretNotFoundError("No iman-wm watermark found")
         finally:
             doc.close()
 
     # ---------------------
-    # Internal helpers
+    # Location 1: catalog -> extra stream object
+    # ---------------------
+
+    def _write_catalog(self, doc, payload: bytes) -> None:
+        xref = doc.get_new_xref()
+        doc.update_object(xref, "<<>>")
+        doc.update_stream(xref, payload, new=True)
+        doc.xref_set_key(doc.pdf_catalog(), self._CATALOG_KEY, f"{xref} 0 R")
+
+    def _read_catalog(self, doc) -> bytes | None:
+        try:
+            kind, value = doc.xref_get_key(doc.pdf_catalog(), self._CATALOG_KEY)
+            if kind != "xref":
+                return None
+            return doc.xref_stream(int(value.split()[0])) or None
+        except Exception:
+            return None
+
+    # ---------------------
+    # Location 2: custom entry in the Info dictionary
+    # ---------------------
+
+    def _write_info(self, doc, payload: bytes) -> None:
+        # base64 keeps the text safe to store as a PDF string
+        text = "(" + base64.urlsafe_b64encode(payload).decode("ascii") + ")"
+        kind, value = doc.xref_get_key(-1, "Info")   # -1 = the trailer
+        if kind == "xref":
+            doc.xref_set_key(int(value.split()[0]), self._INFO_KEY, text)
+        elif kind == "dict":
+            doc.xref_set_key(-1, f"Info/{self._INFO_KEY}", text)
+        else:
+            # No Info dictionary yet: create one and link it from the trailer
+            new = doc.get_new_xref()
+            doc.update_object(new, "<<>>")
+            doc.xref_set_key(-1, "Info", f"{new} 0 R")
+            doc.xref_set_key(new, self._INFO_KEY, text)
+
+    def _read_info(self, doc) -> bytes | None:
+        try:
+            kind, value = doc.xref_get_key(-1, "Info")
+            if kind == "xref":
+                kind, value = doc.xref_get_key(int(value.split()[0]), self._INFO_KEY)
+            elif kind == "dict":
+                kind, value = doc.xref_get_key(-1, f"Info/{self._INFO_KEY}")
+            else:
+                return None
+            if kind != "string":
+                return None
+            return base64.urlsafe_b64decode(value)
+        except Exception:
+            return None
+
+    # ---------------------
+    # Payload helpers
     # ---------------------
 
     def _mac_hex(self, secret_bytes: bytes, key: str) -> str:
