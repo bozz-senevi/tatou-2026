@@ -9,6 +9,7 @@ from flask import Flask, jsonify, request, g, send_file
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from rmap import RMAPServer, RMAPError
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
@@ -40,6 +41,12 @@ def create_app():
 
     app.config["STORAGE_DIR"].mkdir(parents=True, exist_ok=True)
 
+    app.config["RMAP_KEYS_DIR"] = Path(os.environ.get("RMAP_KEYS_DIR", "./keys")).resolve()
+    app.config["RMAP_DOCUMENT_ID"] = os.environ.get("RMAP_DOCUMENT_ID")
+    app.config["RMAP_WATERMARK_METHOD"] = os.environ.get("RMAP_WATERMARK_METHOD", "toy-eof")
+    app.config["RMAP_WATERMARK_KEY"] = os.environ.get("RMAP_WATERMARK_KEY", "dev-rmap-key-change-me")
+
+
     # --- DB engine only (no Table metadata) ---
     def db_url() -> str:
         return (
@@ -53,6 +60,21 @@ def create_app():
             eng = create_engine(db_url(), pool_pre_ping=True, future=True)
             app.config["_ENGINE"] = eng
         return eng
+
+    def get_rmap_server() -> RMAPServer:
+        srv = app.config.get("_RMAP_SERVER")
+        if srv is None:
+            keys_dir = app.config["RMAP_KEYS_DIR"]
+            srv = RMAPServer(
+                keys_dir / "server_pub.asc",
+                keys_dir / "server_priv.asc",
+                linkPrefix="",  # bare 32-hex link, per API.md's rmap-get-link spec
+                verbose=False,
+            )
+            srv.loadIdentities(keys_dir / "clients")
+            app.config["_RMAP_SERVER"] = srv
+        return srv
+
 
     # --- Helpers ---
     def _serializer():
@@ -656,70 +678,70 @@ def create_app():
         }), 201
         
         
-    @app.post("/api/load-plugin")
-    @require_auth
-    def load_plugin():
-        """
-        Load a serialized Python class implementing WatermarkingMethod from
-        STORAGE_DIR/files/plugins/<filename>.{pkl|dill} and register it in wm_mod.METHODS.
-        Body: { "filename": "MyMethod.pkl", "overwrite": false }
-        """
-        payload = request.get_json(silent=True) or {}
-        filename = (payload.get("filename") or "").strip()
-        overwrite = bool(payload.get("overwrite", False))
+    # @app.post("/api/load-plugin")
+    # @require_auth
+    # def load_plugin():
+    #     """
+    #     Load a serialized Python class implementing WatermarkingMethod from
+    #     STORAGE_DIR/files/plugins/<filename>.{pkl|dill} and register it in wm_mod.METHODS.
+    #     Body: { "filename": "MyMethod.pkl", "overwrite": false }
+    #     """
+    #     payload = request.get_json(silent=True) or {}
+    #     filename = (payload.get("filename") or "").strip()
+    #     overwrite = bool(payload.get("overwrite", False))
 
-        if not filename:
-            return jsonify({"error": "filename is required"}), 400
+    #     if not filename:
+    #         return jsonify({"error": "filename is required"}), 400
 
-        # Locate the plugin in /storage/files/plugins (relative to STORAGE_DIR)
-        storage_root = Path(app.config["STORAGE_DIR"])
-        plugins_dir = storage_root / "files" / "plugins"
-        try:
-            plugins_dir.mkdir(parents=True, exist_ok=True)
-            plugin_path = plugins_dir / filename
-        except Exception as e:
-            return jsonify({"error": f"plugin path error: {e}"}), 500
+    #     # Locate the plugin in /storage/files/plugins (relative to STORAGE_DIR)
+    #     storage_root = Path(app.config["STORAGE_DIR"])
+    #     plugins_dir = storage_root / "files" / "plugins"
+    #     try:
+    #         plugins_dir.mkdir(parents=True, exist_ok=True)
+    #         plugin_path = plugins_dir / filename
+    #     except Exception as e:
+    #         return jsonify({"error": f"plugin path error: {e}"}), 500
 
-        if not plugin_path.exists():
-            return jsonify({"error": f"plugin file not found: {safe}"}), 404
+    #     if not plugin_path.exists():
+    #         return jsonify({"error": f"plugin file not found: {safe}"}), 404
 
-        # Unpickle the object (dill if available; else std pickle)
-        try:
-            with plugin_path.open("rb") as f:
-                obj = _pickle.load(f)
-        except Exception as e:
-            return jsonify({"error": f"failed to deserialize plugin: {e}"}), 400
+    #     # Unpickle the object (dill if available; else std pickle)
+    #     try:
+    #         with plugin_path.open("rb") as f:
+    #             obj = _pickle.load(f)
+    #     except Exception as e:
+    #         return jsonify({"error": f"failed to deserialize plugin: {e}"}), 400
 
-        # Accept: class object, or instance (we'll promote instance to its class)
-        if isinstance(obj, type):
-            cls = obj
-        else:
-            cls = obj.__class__
+    #     # Accept: class object, or instance (we'll promote instance to its class)
+    #     if isinstance(obj, type):
+    #         cls = obj
+    #     else:
+    #         cls = obj.__class__
 
-        # Determine method name for registry
-        method_name = getattr(cls, "name", getattr(cls, "__name__", None))
-        if not method_name or not isinstance(method_name, str):
-            return jsonify({"error": "plugin class must define a readable name (class.__name__ or .name)"}), 400
+    #     # Determine method name for registry
+    #     method_name = getattr(cls, "name", getattr(cls, "__name__", None))
+    #     if not method_name or not isinstance(method_name, str):
+    #         return jsonify({"error": "plugin class must define a readable name (class.__name__ or .name)"}), 400
 
-        # Validate interface: either subclass of WatermarkingMethod or duck-typing
-        has_api = all(hasattr(cls, attr) for attr in ("add_watermark", "read_secret"))
-        if WatermarkingMethod is not None:
-            is_ok = issubclass(cls, WatermarkingMethod) and has_api
-        else:
-            is_ok = has_api
-        if not is_ok:
-            return jsonify({"error": "plugin does not implement WatermarkingMethod API (add_watermark/read_secret)"}), 400
+    #     # Validate interface: either subclass of WatermarkingMethod or duck-typing
+    #     has_api = all(hasattr(cls, attr) for attr in ("add_watermark", "read_secret"))
+    #     if WatermarkingMethod is not None:
+    #         is_ok = issubclass(cls, WatermarkingMethod) and has_api
+    #     else:
+    #         is_ok = has_api
+    #     if not is_ok:
+    #         return jsonify({"error": "plugin does not implement WatermarkingMethod API (add_watermark/read_secret)"}), 400
             
-        # Register the class (not an instance) so you can instantiate as needed later
-        WMUtils.METHODS[method_name] = cls()
+    #     # Register the class (not an instance) so you can instantiate as needed later
+    #     WMUtils.METHODS[method_name] = cls()
         
-        return jsonify({
-            "loaded": True,
-            "filename": filename,
-            "registered_as": method_name,
-            "class_qualname": f"{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', cls.__name__)}",
-            "methods_count": len(WMUtils.METHODS)
-        }), 201
+    #     return jsonify({
+    #         "loaded": True,
+    #         "filename": filename,
+    #         "registered_as": method_name,
+    #         "class_qualname": f"{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', cls.__name__)}",
+    #         "methods_count": len(WMUtils.METHODS)
+    #     }), 201
         
     
     
@@ -810,6 +832,134 @@ def create_app():
             "position": position
         }), 201
 
+    # POST /api/rmap-initiate
+    @app.post("/api/rmap-initiate")
+    def rmap_initiate():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON body with a 'payload' field is required"}), 400
+        try:
+            server = get_rmap_server()
+            identity, resp1 = server.receiveMsg1(payload)
+        except RMAPError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"rmap not available: {e}"}), 503
+        return jsonify(resp1), 200
+
+    # POST /api/rmap-get-link
+    @app.post("/api/rmap-get-link")
+    def rmap_get_link():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify({"error": "JSON body with a 'payload' field is required"}), 400
+        try:
+            server = get_rmap_server()
+            identity, expected_link, resp2 = server.receiveMsg2(payload)
+        except RMAPError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"rmap not available: {e}"}), 503
+
+        doc_id = app.config.get("RMAP_DOCUMENT_ID")
+        if not doc_id:
+            return jsonify({"error": "RMAP_DOCUMENT_ID is not configured"}), 503
+
+        # Replay of an already-completed handshake (same nonces -> same expected_link):
+        # the version was already created and recorded, so just hand back resp2 again
+        # without touching the filesystem or re-inserting.
+        try:
+            with get_engine().connect() as conn:
+                existing = conn.execute(
+                    text("SELECT id FROM Versions WHERE link = :link LIMIT 1"),
+                    {"link": expected_link},
+                ).first()
+        except Exception as e:
+            return jsonify({"error": f"database error: {str(e)}"}), 503
+        if existing:
+            return jsonify(resp2), 200
+
+        try:
+            with get_engine().connect() as conn:
+                row = conn.execute(
+                    text("SELECT id, name, path FROM Documents WHERE id = :id LIMIT 1"),
+                    {"id": int(doc_id)},
+                ).first()
+        except Exception as e:
+            return jsonify({"error": f"database error: {str(e)}"}), 503
+        if not row:
+            return jsonify({"error": "configured RMAP document not found"}), 500
+
+        storage_root = Path(app.config["STORAGE_DIR"]).resolve()
+        file_path = Path(row.path)
+        if not file_path.is_absolute():
+            file_path = storage_root / file_path
+        file_path = file_path.resolve()
+        try:
+            file_path.relative_to(storage_root)
+        except ValueError:
+            return jsonify({"error": "document path invalid"}), 500
+        if not file_path.exists():
+            return jsonify({"error": "file missing on disk"}), 410
+
+        method = app.config["RMAP_WATERMARK_METHOD"]
+        key = app.config["RMAP_WATERMARK_KEY"]
+
+        try:
+            wm_bytes: bytes = WMUtils.apply_watermark(
+                pdf=str(file_path),
+                secret=identity,
+                key=key,
+                method=method,
+                position=None,
+            )
+        except Exception as e:
+            return jsonify({"error": f"watermarking failed: {e}"}), 500
+
+        base_name = Path(row.name or file_path.name).stem
+        intended_slug = secure_filename(identity)
+        dest_dir = file_path.parent / "watermarks"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        candidate = f"{base_name}__rmap__{intended_slug}__{expected_link}.pdf"
+        dest_path = dest_dir / candidate
+
+        try:
+            with dest_path.open("wb") as f:
+                f.write(wm_bytes)
+        except Exception as e:
+            return jsonify({"error": f"failed to write watermarked file: {e}"}), 500
+
+        try:
+            with get_engine().begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO Versions (documentid, link, intended_for, secret, method, position, path)
+                        VALUES (:documentid, :link, :intended_for, :secret, :method, :position, :path)
+                    """),
+                    {
+                        "documentid": int(doc_id),
+                        "link": expected_link,
+                        "intended_for": identity,
+                        "secret": identity,
+                        "method": method,
+                        "position": "",
+                        "path": str(dest_path),
+                    },
+                )
+        except IntegrityError:
+            # Lost a race with a concurrent identical replay that inserted first.
+            # add_watermark() is deterministic, so dest_path already holds the
+            # correct bytes for this link either way - do not delete it.
+            pass
+        except Exception as e:
+            try:
+                dest_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return jsonify({"error": f"database error during version insert: {e}"}), 503
+
+        return jsonify(resp2), 200
+
     return app
     
 
@@ -819,4 +969,3 @@ app = create_app()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
