@@ -19,14 +19,19 @@ def _strip(pdf_bytes: bytes, where: str) -> bytes:
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     if where == "catalog":
         doc.xref_set_key(doc.pdf_catalog(), "ImanWM", "null")
-    else:  # "info": wipe the whole metadata dictionary
+    elif where == "info":
         doc.xref_set_key(-1, "Info", "null")
+    else:  # "page_text": redact the invisible text on every page
+        for page in doc:
+            for rect in page.search_for("\u2063"):
+                page.add_redact_annot(rect)
+            page.apply_redactions()
     out = doc.tobytes()
     doc.close()
     return out
 
 
-@pytest.mark.parametrize("where", ["catalog", "info"])
+@pytest.mark.parametrize("where", ["catalog", "info,"," page_text"])
 def test_survives_removal_of_one_location(marked_pdf, where):
     stripped = _strip(marked_pdf, where)
     assert ImanWM().read_secret(stripped, "k1") == "Group 07"

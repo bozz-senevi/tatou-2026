@@ -1,12 +1,15 @@
 """iman_wm.py
 
-Fingerprinting watermark. The recipient ID (the "secret") is stored in TWO
-independent places inside the PDF, each together with an HMAC made from the
+Fingerprinting watermark. The recipient ID (the "secret") is stored in THREE
+independent places inside the PDF, each protected with an HMAC made from the
 key:
   1. an extra stream object linked from the document catalog
   2. a custom entry in the Info (metadata) dictionary
-read_secret tries both, so removing one location does not remove the mark.
-Without the key, nobody can create or change a mark that passes the check.
+  3. invisible text on every page (PDF text render mode 3: present in the
+     page content, extractable, but not drawn on screen or in print)
+read_secret tries all three, so removing any one or two locations does not
+remove the mark. Without the key, nobody can create or change a mark that
+passes the check.
 """
 from __future__ import annotations
 
@@ -31,19 +34,20 @@ from watermarking_method import (
 class ImanWM(WatermarkingMethod):
     name: Final[str] = "iman-wm"
 
-    _CATALOG_KEY: Final[str] = "ImanWM"   # entry in the catalog -> our object
-    _INFO_KEY: Final[str] = "ImanWM"      # entry in the Info dictionary
+    _CATALOG_KEY: Final[str] = "ImanWM"    # entry in the catalog -> our object
+    _INFO_KEY: Final[str] = "ImanWM"       # entry in the Info dictionary
+    _MARKER: Final[str] = "\u2063"         # invisible unicode char that wraps our text mark
     # Mixed into the HMAC so this method's marks can't be reused elsewhere
     _CONTEXT: Final[bytes] = b"wm:iman-wm:v1:"
 
     @staticmethod
     def get_usage() -> str:
-        return ("Stores the secret plus an HMAC (made with the key) in two "
-                "places: an extra PDF object linked from the catalog and a "
-                "custom Info-dictionary entry. Position is ignored.")
+        return ("Stores the secret plus an HMAC (made with the key) in three "
+                "places: an extra PDF object linked from the catalog, a "
+                "custom Info-dictionary entry, and invisible text on every "
+                "page. Position is ignored.")
 
     def is_watermark_applicable(self, pdf: PdfSource, position: str | None = None) -> bool:
-        # Applicable if PyMuPDF can open the PDF, it has pages, and it is not password-protected
         try:
             doc = fitz.open(stream=load_pdf_bytes(pdf), filetype="pdf")
             ok = (not doc.needs_pass) and doc.page_count > 0
@@ -69,6 +73,7 @@ class ImanWM(WatermarkingMethod):
             payload = self._build_payload(secret, key)
             self._write_catalog(doc, payload)
             self._write_info(doc, payload)
+            self._write_page_text(doc, payload)
             # no_new_id keeps the output deterministic (same input -> same bytes)
             return doc.tobytes(no_new_id=True)
         finally:
@@ -85,8 +90,7 @@ class ImanWM(WatermarkingMethod):
             raise WatermarkingError("Could not open PDF") from exc
         try:
             last_error: Exception | None = None
-            # Try each hiding place; the first one that verifies wins
-            for reader in (self._read_catalog, self._read_info):
+            for reader in (self._read_catalog, self._read_info, self._read_page_text):
                 payload = reader(doc)
                 if payload is None:
                     continue
@@ -124,7 +128,6 @@ class ImanWM(WatermarkingMethod):
     # ---------------------
 
     def _write_info(self, doc, payload: bytes) -> None:
-        # base64 keeps the text safe to store as a PDF string
         text = "(" + base64.urlsafe_b64encode(payload).decode("ascii") + ")"
         kind, value = doc.xref_get_key(-1, "Info")   # -1 = the trailer
         if kind == "xref":
@@ -132,7 +135,6 @@ class ImanWM(WatermarkingMethod):
         elif kind == "dict":
             doc.xref_set_key(-1, f"Info/{self._INFO_KEY}", text)
         else:
-            # No Info dictionary yet: create one and link it from the trailer
             new = doc.get_new_xref()
             doc.update_object(new, "<<>>")
             doc.xref_set_key(-1, "Info", f"{new} 0 R")
@@ -150,6 +152,35 @@ class ImanWM(WatermarkingMethod):
             if kind != "string":
                 return None
             return base64.urlsafe_b64decode(value)
+        except Exception:
+            return None
+
+    # ---------------------
+    # Location 3: invisible text on every page
+    # ---------------------
+
+    def _write_page_text(self, doc, payload: bytes) -> None:
+        # Wrap the base64 payload between two invisible marker characters so
+        # we can find it back even among other page text.
+        text = self._MARKER + base64.urlsafe_b64encode(payload).decode("ascii") + self._MARKER
+        for page in doc:
+            # render_mode=3 means "invisible": the text is in the content
+            # stream and extractable, but nothing is drawn.
+            page.insert_text((0, 10), text, fontsize=1, render_mode=3)
+
+    def _read_page_text(self, doc) -> bytes | None:
+        try:
+            for page in doc:
+                full_text = page.get_text()
+                start = full_text.find(self._MARKER)
+                if start == -1:
+                    continue
+                end = full_text.find(self._MARKER, start + len(self._MARKER))
+                if end == -1:
+                    continue
+                b64 = full_text[start + len(self._MARKER):end]
+                return base64.urlsafe_b64decode(b64)
+            return None
         except Exception:
             return None
 
