@@ -1,16 +1,12 @@
-"""sussann_watermark.py
-
-Watermarking method implemented by Sussann.
-
-This class follows the WatermarkingMethod interface used by Tatou.
-"""
-
 from __future__ import annotations
 
+import hashlib
 from typing import Final
+
 import fitz  # PyMuPDF
 
 from watermarking_method import (
+    InvalidKeyError,
     PdfSource,
     SecretNotFoundError,
     WatermarkingMethod,
@@ -19,7 +15,6 @@ from watermarking_method import (
 
 
 class SussannWatermark(WatermarkingMethod):
-    """Sussann's watermarking method."""
 
     name: Final[str] = "sussann-watermark"
 
@@ -41,7 +36,11 @@ class SussannWatermark(WatermarkingMethod):
         document = fitz.open(stream=data, filetype="pdf")
 
         metadata = document.metadata
+
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+
         metadata["keywords"] = secret
+        metadata["producer"] = key_hash
         document.set_metadata(metadata)
 
         watermarked_pdf = document.tobytes()
@@ -65,11 +64,19 @@ class SussannWatermark(WatermarkingMethod):
         data = load_pdf_bytes(pdf)
 
         document = fitz.open(stream=data, filetype="pdf")
+
         secret = document.metadata.get("keywords")
+        saved_key_hash = document.metadata.get("producer")
+
         document.close()
 
         if not secret:
             raise SecretNotFoundError("No watermark found")
+
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+
+        if key_hash != saved_key_hash:
+            raise InvalidKeyError("Invalid key")
 
         return secret
 
