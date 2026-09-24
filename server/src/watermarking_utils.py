@@ -42,8 +42,8 @@ from watermarking_method import (
     load_pdf_bytes,
 )
 from add_after_eof import AddAfterEOF
+from stealth_invisible_watermark import StealthInvisibleWatermark
 from sussann_watermark import SussannWatermark
-
 from iman_wm import ImanWM
 
 # --------------------
@@ -52,6 +52,7 @@ from iman_wm import ImanWM
 
 METHODS: Dict[str, WatermarkingMethod] = {
     AddAfterEOF.name: AddAfterEOF(),
+    StealthInvisibleWatermark.name: StealthInvisibleWatermark(),
     ImanWM.name: ImanWM(),
     SussannWatermark.name: SussannWatermark(),
 }
@@ -253,4 +254,3 @@ __all__ = [
     "explore_pdf",
     "is_watermarking_applicable"
 ]
-
