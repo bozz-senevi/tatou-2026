@@ -42,6 +42,7 @@ from watermarking_method import (
     load_pdf_bytes,
 )
 from add_after_eof import AddAfterEOF
+from sussann_watermark import SussannWatermark
 
 # --------------------
 # Method registry
@@ -49,6 +50,7 @@ from add_after_eof import AddAfterEOF
 
 METHODS: Dict[str, WatermarkingMethod] = {
     AddAfterEOF.name: AddAfterEOF(),
+    SussannWatermark.name: SussannWatermark(),
 }
 """Registry of available watermarking methods.
 
