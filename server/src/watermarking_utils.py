@@ -43,6 +43,8 @@ from watermarking_method import (
 )
 from add_after_eof import AddAfterEOF
 from stealth_invisible_watermark import StealthInvisibleWatermark
+from sussann_watermark import SussannWatermark
+from iman_wm import ImanWM
 
 # --------------------
 # Method registry
@@ -51,7 +53,10 @@ from stealth_invisible_watermark import StealthInvisibleWatermark
 METHODS: Dict[str, WatermarkingMethod] = {
     AddAfterEOF.name: AddAfterEOF(),
     StealthInvisibleWatermark.name: StealthInvisibleWatermark(),
+    ImanWM.name: ImanWM(),
+    SussannWatermark.name: SussannWatermark(),
 }
+
 """Registry of available watermarking methods.
 
 Keys are human-readable method names (stable, lowercase, hyphenated)
