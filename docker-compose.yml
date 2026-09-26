@@ -23,6 +23,7 @@ services:
       - RMAP_DOCUMENT_ID=${RMAP_DOCUMENT_ID}
       - RMAP_WATERMARK_METHOD=${RMAP_WATERMARK_METHOD}
       - RMAP_WATERMARK_KEY=${RMAP_WATERMARK_KEY}
+      - RMAP_SERVER_KEY_PASSPHRASE=${RMAP_SERVER_KEY_PASSPHRASE}
     depends_on:
       db:
         condition: service_healthy
