@@ -45,7 +45,7 @@ def create_app():
     app.config["RMAP_DOCUMENT_ID"] = os.environ.get("RMAP_DOCUMENT_ID")
     app.config["RMAP_WATERMARK_METHOD"] = os.environ.get("RMAP_WATERMARK_METHOD", "toy-eof")
     app.config["RMAP_WATERMARK_KEY"] = os.environ.get("RMAP_WATERMARK_KEY", "dev-rmap-key-change-me")
-
+    app.config["RMAP_SERVER_KEY_PASSPHRASE"] = os.environ.get("RMAP_SERVER_KEY_PASSPHRASE") or None
 
     # --- DB engine only (no Table metadata) ---
     def db_url() -> str:
@@ -68,6 +68,7 @@ def create_app():
             srv = RMAPServer(
                 keys_dir / "server_pub.asc",
                 keys_dir / "server_priv.asc",
+                passphrase=app.config["RMAP_SERVER_KEY_PASSPHRASE"],
                 linkPrefix="",  # bare 32-hex link, per API.md's rmap-get-link spec
                 verbose=False,
             )
