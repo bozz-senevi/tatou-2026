@@ -25,3 +25,16 @@ python_files = ["test_*.py"]
 
 [project.scripts]
 pdfwm = "watermarking_cli:main"                 # now you can run `pdfwm methods`
+
+[tool.mutmut]
+source_paths = ["src/server.py"]
+pytest_add_cli_args_test_selection = ["test/"]
+also_copy = [
+    "src/watermarking_utils.py",
+    "src/watermarking_method.py",
+    "src/add_after_eof.py",
+    "src/iman_wm.py",
+    "src/stealth_invisible_watermark.py",
+    "src/sussann_watermark.py",
+    "src/unsafe_bash_bridge_append_eof.py",
+]
