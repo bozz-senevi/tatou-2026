@@ -28,7 +28,8 @@ pdfwm = "watermarking_cli:main"                 # now you can run `pdfwm methods
 
 [tool.mutmut]
 source_paths = ["src/server.py"]
-pytest_add_cli_args_test_selection = ["test/"]
+mutate_only_covered_lines = true
+pytest_add_cli_args_test_selection = ["test/test_api.py"]
 also_copy = [
     "src/watermarking_utils.py",
     "src/watermarking_method.py",

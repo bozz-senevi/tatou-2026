@@ -25,6 +25,17 @@ import watermarking_utils as WMUtils
 from watermarking_method import WatermarkingMethod
 #from watermarking_utils import METHODS, apply_watermark, read_watermark, explore_pdf, is_watermarking_applicable, get_method
 
+def credentials_valid(row, password):
+    return row is not None and check_password_hash(row.hpassword, password)
+
+def document_lookup_query():
+    return text("""
+        SELECT id, name, path, HEX(sha256) AS sha256_hex, size
+        FROM Documents
+        WHERE id = :id AND ownerid = :uid
+        LIMIT 1
+    """)
+
 def create_app():
     app = Flask(__name__)
 
@@ -176,7 +187,7 @@ def create_app():
         except Exception as e:
             return jsonify({"error": f"database error: {str(e)}"}), 503
 
-        if not row or not check_password_hash(row.hpassword, password):
+        if not credentials_valid(row, password):
             return jsonify({"error": "invalid credentials"}), 401
 
         token = _serializer().dumps({"uid": int(row.id), "login": row.login, "email": row.email})
@@ -354,14 +365,10 @@ def create_app():
         try:
             with get_engine().connect() as conn:
                 row = conn.execute(
-                    text("""
-                        SELECT id, name, path, HEX(sha256) AS sha256_hex, size
-                        FROM Documents
-                        WHERE id = :id AND ownerid = :uid
-                        LIMIT 1
-                    """),
-                    {"id": document_id, "uid": int(g.user["id"])},
+                    document_lookup_query(),
+                 {"id": document_id, "uid": int(g.user["id"])},
                 ).first()
+
         except Exception as e:
             return jsonify({"error": f"database error: {str(e)}"}), 503
 
