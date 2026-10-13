@@ -76,6 +76,10 @@ class ImanWM(WatermarkingMethod):
             self._write_page_text(doc, payload)
             # no_new_id keeps the output deterministic (same input -> same bytes)
             return doc.tobytes(no_new_id=True)
+        except (ValueError, WatermarkingError):
+            raise
+        except Exception as exc:
+            raise WatermarkingError("Failed to embed watermark") from exc
         finally:
             doc.close()
 
