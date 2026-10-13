@@ -72,3 +72,53 @@ convert any other exception to `WatermarkingError` (or `SecretNotFoundError` in
   (Atheris/libFuzzer) would likely reach deeper paths.
 - `stealth-invisible-watermark` produced no findings in this campaign — either
   robust to these inputs, or under-exercised by this seed.
+
+---
+
+# API-level findings (fuzz/fuzz_api.py)
+
+A second campaign fuzzed the HTTP API past authentication and JSON parsing:
+register a user, log in, upload a document, then inject malformed values one
+field at a time into the authenticated endpoints. Oracle: any 5xx response, or
+an internal error string leaked in the body. Raw output in `fuzz/api_results.txt`.
+
+## Bug C1 - non-string field crashes create-watermark (HTTP 500) (HIGH)
+
+Observed: `intended_for = {"x":"y"}` -> HTML `500 Internal Server Error`.
+Root cause: `create_watermark` checks `if not intended_for` (a dict is truthy,
+so it passes) but never checks the type; a non-string then breaks downstream
+filename handling with an uncaught exception.
+Impact: an authenticated client crashes the endpoint with a well-formed request.
+Fix: require `isinstance(intended_for, str)` and return 400 otherwise.
+
+## Bug C2 - empty string bypasses validation, 500 instead of 400 (MEDIUM)
+
+Observed: `key = ""` or `secret = ""` -> `500 "watermarking failed: Key/Secret
+must be a non-empty string"`.
+Root cause: validation uses `isinstance(key, str)`, which accepts `""`; the empty
+value reaches the method, which raises `ValueError`, and the generic handler
+turns a bad-input case into a 500.
+Impact: bad input reported as a server error (wrong status) and internal message
+leaked.
+Fix: reject empty strings at validation time (400); catch method `ValueError` as
+400, not 500.
+
+## Bug C3 - raw database error leaked to client (MEDIUM, info-leak)
+
+Observed: `503 "database error during version insert: (pymysql.err.
+IntegrityError) (1062, 'Duplicate entry ...')"`.
+Root cause: `create_watermark` returns the raw exception string on DB errors.
+The duplicate arises because the version `link` is `sha1(filename)`, and repeated
+requests for the same document produce colliding filenames/links.
+Honest caveat: the collision was provoked by the fuzzer reusing one document; a
+normal client would not trivially hit it. The leak of raw pymysql internals to
+the client is the real standalone finding.
+Fix: log DB errors server-side and return a generic message; handle a duplicate
+link deterministically (reuse or 409) instead of a raw 503.
+
+## Note
+
+All three live in `server.py`, which is owned/edited by other group members and
+currently carries the SQLi/IDOR fixes. These are reported with recommended fixes
+and flagged to the team rather than patched here, to avoid colliding with that
+work.
