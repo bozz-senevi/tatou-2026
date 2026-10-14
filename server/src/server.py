@@ -1,7 +1,9 @@
 import os
 import io
+import time
 import hashlib
 import secrets
+from collections import defaultdict, deque
 import datetime as dt
 from pathlib import Path
 from functools import wraps
@@ -113,6 +115,28 @@ def create_app():
             return f(*args, **kwargs)
         return wrapper
 
+  # In-memory sliding-window rate limiter, keyed by (route, client IP).
+    # Single-process-only: resets on restart, and does not share state across
+    # multiple gunicorn workers. Matches this deployment's existing single-worker
+    # assumption (see get_rmap_server()'s own in-memory cache for the same caveat).
+    _rate_limit_buckets: dict[str, deque] = defaultdict(deque)
+    RATE_LIMIT_MAX = 5
+    RATE_LIMIT_WINDOW_SECONDS = 60
+
+    def rate_limited(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            key = f"{f.__name__}:{request.remote_addr or 'unknown'}"
+            now = time.monotonic()
+            bucket = _rate_limit_buckets[key]
+            while bucket and bucket[0] < now - RATE_LIMIT_WINDOW_SECONDS:
+                bucket.popleft()
+            if len(bucket) >= RATE_LIMIT_MAX:
+                return jsonify({"error": "too many requests, try again later"}), 429
+            bucket.append(now)
+            return f(*args, **kwargs)
+        return wrapper
+    
     def _sha256_file(path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as f:
@@ -142,6 +166,7 @@ def create_app():
 
     # POST /api/create-user {email, login, password}
     @app.post("/api/create-user")
+    @rate_limited
     def create_user():
         payload = request.get_json(silent=True) or {}
         email = (payload.get("email") or "").strip().lower()
@@ -172,6 +197,7 @@ def create_app():
 
     # POST /api/login {login, password}
     @app.post("/api/login")
+    @rate_limited
     def login():
         payload = request.get_json(silent=True) or {}
         email = (payload.get("email") or "").strip()
@@ -204,7 +230,14 @@ def create_app():
         if not file or file.filename == "":
             return jsonify({"error": "empty filename"}), 400
 
-        fname = file.filename
+        fname = secure_filename(file.filename)
+        if not fname:
+            return jsonify({"error": "invalid filename"}), 400
+
+        header = file.stream.read(5)
+        file.stream.seek(0)
+        if header != b"%PDF-":
+            return jsonify({"error": "only PDF files are accepted"}), 400
 
         user_dir = app.config["STORAGE_DIR"] / "files" / g.user["login"]
         user_dir.mkdir(parents=True, exist_ok=True)

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS `Versions` (
   `method` VARCHAR(32) NOT NULL,               -- e.g., "text_overlay"
   `position` TEXT,               -- e.g., "text_overlay"
   `path` VARCHAR(320) NOT NULL,              -- secret
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_Versions_link` (`link`),
   KEY `ix_Versions_documentid` (`documentid`),
@@ -54,3 +55,7 @@ CREATE TABLE IF NOT EXISTS `Versions` (
     ON UPDATE CASCADE ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Migration for already-initialized databases (tatou.sql only runs on first
+-- container init, so a fresh CREATE TABLE above doesn't reach a DB that
+-- already exists): add the same column if it isn't there yet.
+ALTER TABLE `Versions` ADD COLUMN IF NOT EXISTS `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6);
