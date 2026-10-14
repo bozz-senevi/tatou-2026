@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from typing import Final
 
@@ -9,6 +10,7 @@ from watermarking_method import (
     InvalidKeyError,
     PdfSource,
     SecretNotFoundError,
+    WatermarkingError,
     WatermarkingMethod,
     load_pdf_bytes,
 )
@@ -33,18 +35,31 @@ class SussannWatermark(WatermarkingMethod):
         """Add the watermark to the PDF."""
         data = load_pdf_bytes(pdf)
 
-        document = fitz.open(stream=data, filetype="pdf")
+        try:
+            document = fitz.open(stream=data, filetype="pdf")
+        except Exception as exc:
+            raise WatermarkingError("Could not open PDF") from exc
 
-        metadata = document.metadata
+        try:
+            metadata = document.metadata
 
-        key_hash = hashlib.sha256(key.encode()).hexdigest()
+            key_hash = hashlib.sha256(key.encode()).hexdigest()
 
-        metadata["keywords"] = secret
-        metadata["producer"] = key_hash
-        document.set_metadata(metadata)
+            # Base64-encode so control/non-printable bytes survive storage in
+            # the PDF metadata (which only keeps printable text).
+            encoded_secret = base64.b64encode(secret.encode("utf-8")).decode("ascii")
 
-        watermarked_pdf = document.tobytes()
-        document.close()
+            metadata["keywords"] = encoded_secret
+            metadata["producer"] = key_hash
+            document.set_metadata(metadata)
+
+            watermarked_pdf = document.tobytes()
+        except (ValueError, WatermarkingError):
+            raise
+        except Exception as exc:
+            raise WatermarkingError("Failed to embed watermark") from exc
+        finally:
+            document.close()
 
         return watermarked_pdf
 
@@ -73,14 +88,18 @@ class SussannWatermark(WatermarkingMethod):
         """Read the secret stored in the watermark."""
         data = load_pdf_bytes(pdf)
 
-        document = fitz.open(stream=data, filetype="pdf")
+        try:
+            document = fitz.open(stream=data, filetype="pdf")
+        except Exception as exc:
+            raise WatermarkingError("Could not open PDF") from exc
 
-        secret = document.metadata.get("keywords")
-        saved_key_hash = document.metadata.get("producer")
+        try:
+            stored = document.metadata.get("keywords")
+            saved_key_hash = document.metadata.get("producer")
+        finally:
+            document.close()
 
-        document.close()
-
-        if not secret:
+        if not stored:
             raise SecretNotFoundError("No watermark found")
 
         key_hash = hashlib.sha256(key.encode()).hexdigest()
@@ -88,7 +107,11 @@ class SussannWatermark(WatermarkingMethod):
         if key_hash != saved_key_hash:
             raise InvalidKeyError("Invalid key")
 
-        return secret
+        # Decode the base64 secret back to its original bytes.
+        try:
+            return base64.b64decode(stored).decode("utf-8")
+        except Exception as exc:
+            raise SecretNotFoundError("Malformed watermark payload") from exc
 
 
 __all__ = ["SussannWatermark"]
