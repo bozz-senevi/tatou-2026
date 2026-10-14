@@ -561,8 +561,11 @@ def create_app():
             doc_id = int(doc_id)
         except (TypeError, ValueError):
             return jsonify({"error": "document_id (int) is required"}), 400
-        if not method or not intended_for or not isinstance(secret, str) or not isinstance(key, str):
-            return jsonify({"error": "method, intended_for, secret, and key are required"}), 400
+        if (not isinstance(method, str) or not method
+                or not isinstance(intended_for, str) or not intended_for
+                or not isinstance(secret, str) or not secret
+                or not isinstance(key, str) or not key):
+            return jsonify({"error": "method, intended_for, secret, and key must be non-empty strings"}), 400
 
         # lookup the document; enforce ownership
         try:
@@ -618,8 +621,11 @@ def create_app():
             )
             if not isinstance(wm_bytes, (bytes, bytearray)) or len(wm_bytes) == 0:
                 return jsonify({"error": "watermarking produced no output"}), 500
-        except Exception as e:
-            return jsonify({"error": f"watermarking failed: {e}"}), 500
+        except ValueError as e:
+            return jsonify({"error": f"invalid input: {e}"}), 400
+        except Exception:
+            app.logger.exception("watermarking failed")
+            return jsonify({"error": "watermarking failed"}), 500
 
         # build destination file name: "<original_name>__<intended_to>.pdf"
         base_name = Path(row.name or file_path.name).stem
@@ -658,13 +664,15 @@ def create_app():
                     },
                 )
                 vid = int(conn.execute(text("SELECT LAST_INSERT_ID()")).scalar())
-        except Exception as e:
-            # best-effort cleanup if DB insert fails
+        except IntegrityError:
+            return jsonify({"error": "a watermark for this recipient already exists"}), 409
+        except Exception:
+            app.logger.exception("version insert failed")
             try:
                 dest_path.unlink(missing_ok=True)
             except Exception:
                 pass
-            return jsonify({"error": f"database error during version insert: {e}"}), 503
+            return jsonify({"error": "internal error creating version"}), 500
 
         return jsonify({
             "id": vid,
