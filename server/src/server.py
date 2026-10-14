@@ -1,6 +1,7 @@
 import os
 import io
 import hashlib
+import secrets
 import datetime as dt
 from pathlib import Path
 from functools import wraps
@@ -473,25 +474,30 @@ def create_app():
 
     # DELETE /api/delete-document  (and variants)
     @app.route("/api/delete-document", methods=["DELETE", "POST"])  # POST supported for convenience
-    @app.route("/api/delete-document/<document_id>", methods=["DELETE"])
+    @app.route("/api/delete-document/<int:document_id>", methods=["DELETE"])
     @require_auth
     def delete_document(document_id: int | None = None):
         # accept id from path, query (?id= / ?documentid=), or JSON body on POST
-        if not document_id:
-            document_id = (
+        if document_id is None:
+            raw = (
                 request.args.get("id")
                 or request.args.get("documentid")
                 or (request.is_json and (request.get_json(silent=True) or {}).get("id"))
             )
-        try:
-            doc_id = int(document_id)
-        except (TypeError, ValueError):
-            return jsonify({"error": "document id required"}), 400
+            try:
+                document_id = int(raw)
+            except (TypeError, ValueError):
+                return jsonify({"error": "document id required"}), 400
+        doc_id = int(document_id)
 
-        # Fetch the document (enforce ownership)
+        # Fetch the document with a bound parameter, scoped to the caller
+        # (prevents SQL injection and cross-user deletion).
         try:
             with get_engine().connect() as conn:
-                row = conn.execute(text("SELECT * FROM Documents WHERE id = :id AND ownerid = :uid"), {"id": doc_id, "uid": int(g.user["id"])}).first()
+                row = conn.execute(
+                    text("SELECT * FROM Documents WHERE id = :id AND ownerid = :uid"),
+                    {"id": doc_id, "uid": int(g.user["id"])},
+                ).first()
         except Exception as e:
             return jsonify({"error": f"database error: {str(e)}"}), 503
 
@@ -526,7 +532,10 @@ def create_app():
                 # If your schema does NOT have ON DELETE CASCADE on Version.documentid,
                 # uncomment the next line first:
                 # conn.execute(text("DELETE FROM Version WHERE documentid = :id"), {"id": doc_id})
-                conn.execute(text("DELETE FROM Documents WHERE id = :id"), {"id": doc_id})
+                conn.execute(
+                    text("DELETE FROM Documents WHERE id = :id AND ownerid = :uid"),
+                    {"id": doc_id, "uid": int(g.user["id"])},
+                )
         except Exception as e:
             return jsonify({"error": f"database error during delete: {str(e)}"}), 503
 
@@ -645,8 +654,9 @@ def create_app():
         except Exception as e:
             return jsonify({"error": f"failed to write watermarked file: {e}"}), 500
 
-        # link token = sha1(watermarked_file_name)
-        link_token = hashlib.sha1(candidate.encode("utf-8")).hexdigest()
+        # Unpredictable link token: a random value, so get-version links
+        # cannot be guessed from the document name and recipient.
+        link_token = secrets.token_hex(16)
 
         try:
             with get_engine().begin() as conn:
@@ -976,4 +986,6 @@ app = create_app()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # Dev server only (production runs under gunicorn, see entrypoint.sh);
+    # binding all interfaces is intended inside the container.
+    app.run(host="0.0.0.0", port=port)  # nosec B104

@@ -132,7 +132,8 @@ _TYPE_RE: Final[re.Pattern[bytes]] = re.compile(rb"/Type\s*/([A-Za-z]+)")
 
 
 def _sha1(b: bytes) -> str:
-    return hashlib.sha1(b).hexdigest()
+    # Non-security use: deterministic identifier for a PDF node in the tree.
+    return hashlib.sha1(b, usedforsecurity=False).hexdigest()
 
 
 def explore_pdf(pdf: PdfSource) -> Dict[str, Any]:
