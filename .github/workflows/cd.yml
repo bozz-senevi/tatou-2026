@@ -1,0 +1,63 @@
+name: CD
+
+# Deployment only. Runs exactly once, when a PR is merged (i.e. a push lands
+# on main). Does not run on PRs or feature branches. Assumes CI already
+# validated the change via branch protection (require CI to pass before merge).
+on:
+  push:
+    branches: [main]
+
+# Never cancel an in-flight deploy; let each main push finish deploying.
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image (validates merged main builds cleanly)
+        run: docker build -t tatou-server:deploy ./server
+
+  deploy:
+    name: Deploy to VM
+    runs-on: [self-hosted, tatou-vm]
+    needs: build
+    environment: production
+    steps:
+      - name: Pull latest and recreate containers
+        # Deploy in the live checkout on the VM, which holds the gitignored
+        # .env, server/keys/, and the docker volumes. DEPLOY_DIR is a repo
+        # variable (Settings > Secrets and variables > Actions > Variables).
+        run: |
+          set -euo pipefail
+          cd "${DEPLOY_DIR}"
+          echo "Deploying commit ${GITHUB_SHA} in $(pwd)"
+          git fetch --all --prune
+          git checkout main
+          git reset --hard "origin/main"
+          docker compose up -d --build
+          docker compose ps
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+
+      - name: Post-deploy health check
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 15); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/healthz || true)
+            if [ "$code" = "200" ]; then
+              echo "healthz OK (HTTP 200)"
+              curl -s http://localhost:5000/healthz; echo
+              exit 0
+            fi
+            echo "waiting for server... ($i/15, last=$code)"
+            sleep 4
+          done
+          echo "Server did not become healthy in time"
+          cd "${DEPLOY_DIR}" && docker compose logs --tail=50 server
+          exit 1
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}

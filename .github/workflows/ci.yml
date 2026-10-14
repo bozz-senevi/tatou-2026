@@ -1,0 +1,163 @@
+name: CI
+
+# Validation only. Runs when a pull request is opened/updated against main.
+# Does NOT run on pushes to feature branches that have no open PR, and does
+# NOT run on merges to main (that is CD's job). No deploy here.
+on:
+  pull_request:
+    branches: [main]
+
+# One in-flight CI run per PR; a new commit on the PR cancels the older run.
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies (incl. RMAP git dep)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run pytest
+        # Tests import `from server import app`; create_app() opens the DB
+        # lazily and healthz tolerates no DB, so no database is needed here.
+        run: pytest -q
+
+  security:
+    name: Security scan (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true   # surfaces issues without blocking the PR
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install scanners
+        run: pip install bandit pip-audit
+      - name: Bandit (static analysis of src/)
+        run: bandit -r src -ll
+      - name: pip-audit (known-vulnerable dependencies)
+        run: pip-audit || true
+
+  integration:
+    name: Integration smoke test
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      db:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: tatou
+          MARIADB_USER: tatou
+          MARIADB_PASSWORD: tatou
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: tatou
+      DB_USER: tatou
+      DB_PASSWORD: tatou
+      SECRET_KEY: ci-secret-not-production
+      STORAGE_DIR: /tmp/tatou-storage
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install server and DB client
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./server
+          sudo apt-get update && sudo apt-get install -y mariadb-client
+
+      - name: Load database schema
+        run: mariadb -h 127.0.0.1 -P 3306 -uroot -proot < db/tatou.sql
+
+      - name: Start the server (gunicorn, background)
+        run: |
+          mkdir -p "$STORAGE_DIR"
+          cd server
+          gunicorn -b 127.0.0.1:5000 server:app \
+            --access-logfile - --error-logfile - > /tmp/gunicorn.log 2>&1 &
+          echo $! > /tmp/gunicorn.pid
+
+      - name: Wait for healthz with DB connected
+        run: |
+          for i in $(seq 1 20); do
+            body=$(curl -s http://127.0.0.1:5000/healthz || true)
+            echo "attempt $i: $body"
+            if echo "$body" | jq -e '.db_connected == true' >/dev/null 2>&1; then
+              echo "server healthy, DB connected"; exit 0
+            fi
+            sleep 2
+          done
+          echo "---- gunicorn log ----"; cat /tmp/gunicorn.log; exit 1
+
+      - name: Smoke test the auth API
+        run: |
+          set -e
+          BASE=http://127.0.0.1:5000
+
+          echo "== create-user (expect 201) =="
+          code=$(curl -s -o /tmp/cu.json -w '%{http_code}' -X POST $BASE/api/create-user \
+            -H 'Content-Type: application/json' \
+            -d '{"login":"ci","email":"ci@test.local","password":"CiPass123!"}')
+          cat /tmp/cu.json; echo " (HTTP $code)"
+          test "$code" = "201"
+
+          echo "== login (expect token) =="
+          curl -s -X POST $BASE/api/login -H 'Content-Type: application/json' \
+            -d '{"email":"ci@test.local","password":"CiPass123!"}' > /tmp/login.json
+          cat /tmp/login.json; echo
+          TOKEN=$(jq -r '.token' /tmp/login.json)
+          test -n "$TOKEN" -a "$TOKEN" != "null"
+
+          echo "== list-documents with token (expect 200) =="
+          code=$(curl -s -o /tmp/ld.json -w '%{http_code}' \
+            -H "Authorization: Bearer $TOKEN" $BASE/api/list-documents)
+          cat /tmp/ld.json; echo " (HTTP $code)"
+          test "$code" = "200"
+
+          echo "== list-documents without token (expect 401) =="
+          code=$(curl -s -o /dev/null -w '%{http_code}' $BASE/api/list-documents)
+          echo "unauthenticated -> HTTP $code"
+          test "$code" = "401"
+
+          echo "All smoke checks passed."
+
+      - name: Stop the server
+        if: always()
+        run: kill "$(cat /tmp/gunicorn.pid)" 2>/dev/null || true
+
+  build:
+    name: Build server image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image (validates the Dockerfile)
+        run: docker build -t tatou-server:ci ./server

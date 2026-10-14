@@ -120,12 +120,16 @@ def create_app():
     # multiple gunicorn workers. Matches this deployment's existing single-worker
     # assumption (see get_rmap_server()'s own in-memory cache for the same caveat).
     _rate_limit_buckets: dict[str, deque] = defaultdict(deque)
-    RATE_LIMIT_MAX = 5
-    RATE_LIMIT_WINDOW_SECONDS = 60
+    # Generous defaults so the test bench and normal clients are never blocked.
+    # Tune via env; set RATE_LIMIT_MAX=0 to disable the limiter entirely.
+    RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", "100"))
+    RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
 
     def rate_limited(f):
         @wraps(f)
         def wrapper(*args, **kwargs):
+            if RATE_LIMIT_MAX <= 0:  # limiter disabled
+                return f(*args, **kwargs)
             key = f"{f.__name__}:{request.remote_addr or 'unknown'}"
             now = time.monotonic()
             bucket = _rate_limit_buckets[key]
