@@ -1,17 +1,25 @@
 # CI/CD setup
 
-The pipeline is defined in [workflows/ci-cd.yml](workflows/ci-cd.yml).
+CI and CD are two separate workflows:
 
-| Stage         | Runs on            | When                     | Does                                      |
-|---------------|--------------------|--------------------------|-------------------------------------------|
-| `test`        | GitHub-hosted      | every push + PR          | `pip install -e .[dev]` then `pytest`     |
-| `security`    | GitHub-hosted      | every push + PR          | bandit + pip-audit (advisory, non-blocking) |
-| `integration` | GitHub-hosted      | every push (after tests) | real server + MariaDB service: healthz → create-user → login → list-documents |
-| `build`       | GitHub-hosted      | every push (after tests) | `docker build ./server` (validates image) |
-| `deploy`      | self-hosted on VM  | push to `main` only      | pull main, `docker compose up -d --build`, health check |
+- **CI** — [workflows/ci.yml](workflows/ci.yml), trigger `pull_request` → `main`.
+- **CD** — [workflows/cd.yml](workflows/cd.yml), trigger `push` → `main` (i.e. a merge).
 
-Feature branches and PRs run CI but never deploy. Only `main` deploys, and only
-after `test`, `integration`, and `build` all pass.
+| Workflow | Stage         | Runs on           | When                        | Does                                      |
+|----------|---------------|-------------------|-----------------------------|-------------------------------------------|
+| CI       | `test`        | GitHub-hosted     | PR opened/updated vs `main` | `pip install -e .[dev]` then `pytest`     |
+| CI       | `security`    | GitHub-hosted     | PR opened/updated vs `main` | bandit + pip-audit (advisory, non-blocking) |
+| CI       | `integration` | GitHub-hosted     | PR opened/updated vs `main` | real server + MariaDB service: healthz → create-user → login → list-documents |
+| CI       | `build`       | GitHub-hosted     | PR opened/updated vs `main` | `docker build ./server` (validates image) |
+| CD       | `build`       | GitHub-hosted     | merge to `main`             | `docker build ./server` (gate before deploy) |
+| CD       | `deploy`      | self-hosted on VM | merge to `main`             | pull main, `docker compose up -d --build`, health check |
+
+**No duplicate runs:** a plain push to a feature branch runs nothing; opening/updating
+a PR runs CI only; merging the PR runs CD only. CI does not run on merge, and CD does
+not run on PRs.
+
+Because CD assumes CI already validated the change, protect `main` so only
+CI-passing PRs can merge — see "Require CI before merge" below.
 
 The `integration` stage spins up a throwaway `mariadb:11.4` service, loads
 [`db/tatou.sql`](../db/tatou.sql), starts the real app under gunicorn, and
@@ -58,7 +66,19 @@ Name:  DEPLOY_DIR
 Value: /home/softsec/phase1/tatou-2026
 ```
 
-### 4. (Optional) require a manual approval before deploy
+### 4. Require CI before merge (branch protection)
+
+CD trusts that CI already ran, so make CI a merge gate. **Settings → Branches →
+Add branch ruleset (or rule) for `main`**, and enable **Require status checks to
+pass before merging**; select the CI jobs (`Unit tests`, `Integration smoke test`,
+`Build server image`). Optionally **Require a pull request before merging** so
+nothing lands on `main` without a PR. With this, a PR whose CI failed cannot be
+merged, so CD never deploys an unvalidated change.
+
+(`Security scan` is advisory — leave it out of the required checks, or it would
+block merges on findings.)
+
+### 5. (Optional) require a manual approval before deploy
 
 The deploy job uses the `production` environment. Under **Settings → Environments → production** you can add yourself as a **required reviewer** so each deploy waits for a click.
 
