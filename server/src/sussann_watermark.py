@@ -53,9 +53,6 @@ class SussannWatermark(WatermarkingMethod):
         pdf: PdfSource,
         position: str | None = None,
     ) -> bool:
-        # Must be a PDF fitz can open, is not password-protected, and has at
-        # least one page, or tobytes() later raises "cannot save with zero
-        # pages".
         try:
             document = fitz.open(
                 stream=load_pdf_bytes(pdf),
@@ -66,6 +63,7 @@ class SussannWatermark(WatermarkingMethod):
             return applicable
         except Exception:
             return False
+
 
     def read_secret(
         self,
