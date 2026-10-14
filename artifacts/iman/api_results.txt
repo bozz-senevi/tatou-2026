@@ -1,0 +1,29 @@
+[*] target http://localhost:5000
+[*] healthz: 200 {"db_connected":true,"message":"The server is up and running."}
+
+[*] authenticated, test doc id=41
+
+=== API FINDINGS: 6 unique ===
+
+[create-watermark: HTTP 500 [field=intended_for]]
+    value={'x': 'y'} -> <!doctype html>
+<html lang=en>
+<title>500 Internal Server Error</title>
+<h1>Internal Server Error</h
+
+[create-watermark: HTTP 500 [field=key]]
+    value='' -> {"error":"watermarking failed: Key must be a non-empty string"}
+
+
+[create-watermark: HTTP 500 [field=secret]]
+    value='' -> {"error":"watermarking failed: Secret must be a non-empty string"}
+
+
+[create-watermark: HTTP 503 [field=intended_for]]
+    value='../../etc/passwd' -> {"error":"database error during version insert: (pymysql.err.IntegrityError) (1062, \"Duplicate entr
+
+[create-watermark: HTTP 503 [field=key]]
+    value='null' -> {"error":"database error during version insert: (pymysql.err.IntegrityError) (1062, \"Duplicate entr
+
+[create-watermark: HTTP 503 [field=secret]]
+    value='\x00\x01\x02' -> {"error":"database error during version insert: (pymysql.err.IntegrityError) (1062, \"Duplicate entr
