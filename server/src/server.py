@@ -230,7 +230,14 @@ def create_app():
         if not file or file.filename == "":
             return jsonify({"error": "empty filename"}), 400
 
-        fname = file.filename
+        fname = secure_filename(file.filename)
+        if not fname:
+            return jsonify({"error": "invalid filename"}), 400
+
+        header = file.stream.read(5)
+        file.stream.seek(0)
+        if header != b"%PDF-":
+            return jsonify({"error": "only PDF files are accepted"}), 400
 
         user_dir = app.config["STORAGE_DIR"] / "files" / g.user["login"]
         user_dir.mkdir(parents=True, exist_ok=True)
