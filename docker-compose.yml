@@ -14,6 +14,11 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_DIR=/app/logs
+      # App signing key — MUST be set from .env, or auth tokens become forgeable.
+      - SECRET_KEY=${SECRET_KEY}
+      # Rate limiter (0 disables; see server.py). Tune without code changes.
+      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
       # DB connection details for future use by the API
       - DB_HOST=db
       - DB_PORT=3306
