@@ -10,8 +10,10 @@ services:
     volumes:
       - user-files:/app/storage
       - ./server/keys:/app/keys:ro
+      - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
+      - LOG_DIR=/app/logs
       # DB connection details for future use by the API
       - DB_HOST=db
       - DB_PORT=3306
@@ -46,7 +48,9 @@ services:
       timeout: 5s
       retries: 5
     ports:
-      - "3307:3306"
+      # Loopback-only: reachable from the VM itself (e.g. via SSH tunnel),
+      # not exposed to the network.
+      - "127.0.0.1:3307:3306"
     restart: unless-stopped
 
   phpmyadmin:
@@ -57,7 +61,8 @@ services:
       - UPLOAD_LIMIT=64M     # <-- use a unit and quote if using YAML key:value form
       - MEMORY_LIMIT=256M
     ports:
-      - "8080:80"
+      # Loopback-only: reach phpMyAdmin via an SSH tunnel, never from the network.
+      - "127.0.0.1:8080:80"
     depends_on:
       db:
         condition: service_healthy

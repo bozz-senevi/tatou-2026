@@ -2,8 +2,10 @@ import os
 import io
 import time
 import hashlib
+import logging
 import secrets
 from collections import defaultdict, deque
+from logging.handlers import RotatingFileHandler
 import datetime as dt
 from pathlib import Path
 from functools import wraps
@@ -60,6 +62,50 @@ def create_app():
     app.config["RMAP_WATERMARK_METHOD"] = os.environ.get("RMAP_WATERMARK_METHOD", "toy-eof")
     app.config["RMAP_WATERMARK_KEY"] = os.environ.get("RMAP_WATERMARK_KEY", "dev-rmap-key-change-me")
     app.config["RMAP_SERVER_KEY_PASSPHRASE"] = os.environ.get("RMAP_SERVER_KEY_PASSPHRASE") or None
+
+    # --- Logging: rotating file handler so logs persist across restarts ---
+    # Writes to $LOG_DIR/app.log (default /app/logs, mounted to a host dir in
+    # docker-compose so the audit trail survives container recreation).
+    app.config["LOG_DIR"] = Path(os.environ.get("LOG_DIR", "/app/logs"))
+    try:
+        app.config["LOG_DIR"].mkdir(parents=True, exist_ok=True)
+        _fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        _file = RotatingFileHandler(
+            app.config["LOG_DIR"] / "app.log",
+            maxBytes=5 * 1024 * 1024,   # 5 MB per file
+            backupCount=5,              # keep app.log.1 .. app.log.5
+            encoding="utf-8",
+        )
+        _file.setFormatter(_fmt)
+        _file.setLevel(logging.INFO)
+        app.logger.addHandler(_file)
+        app.logger.setLevel(logging.INFO)
+        # Capture gunicorn's error-logger output in the same file.
+        logging.getLogger("gunicorn.error").addHandler(_file)
+    except Exception as exc:  # never let logging setup crash the app
+        app.logger.warning("Could not set up file logging: %s", exc)
+
+    def _client_ip() -> str:
+        """Best-effort client IP, honouring a single proxy's X-Forwarded-For."""
+        xff = request.headers.get("X-Forwarded-For", "")
+        if xff:
+            return xff.split(",")[0].strip()
+        return request.remote_addr or "unknown"
+
+    @app.after_request
+    def _audit_log(response):
+        # One audit line per request: who (if authenticated), from where, what,
+        # and the resulting status. Never let logging break a response.
+        try:
+            user = getattr(g, "user", None)
+            who = user["login"] if isinstance(user, dict) and user.get("login") else "-"
+            app.logger.info(
+                "AUDIT ip=%s user=%s %s %s -> %s",
+                _client_ip(), who, request.method, request.path, response.status_code,
+            )
+        except Exception:
+            pass
+        return response
 
     # --- DB engine only (no Table metadata) ---
     def db_url() -> str:
@@ -897,9 +943,12 @@ def create_app():
             server = get_rmap_server()
             identity, resp1 = server.receiveMsg1(payload)
         except RMAPError as e:
+            app.logger.warning("RMAP initiate rejected ip=%s error=%s", _client_ip(), e)
             return jsonify({"error": str(e)}), 400
         except Exception as e:
+            app.logger.error("RMAP initiate error ip=%s error=%s", _client_ip(), e)
             return jsonify({"error": f"rmap not available: {e}"}), 503
+        app.logger.info("RMAP initiate ok ip=%s identity=%s", _client_ip(), identity)
         return jsonify(resp1), 200
 
     # POST /api/rmap-get-link
@@ -912,9 +961,14 @@ def create_app():
             server = get_rmap_server()
             identity, expected_link, resp2 = server.receiveMsg2(payload)
         except RMAPError as e:
+            app.logger.warning("RMAP get-link rejected ip=%s error=%s", _client_ip(), e)
             return jsonify({"error": str(e)}), 400
         except Exception as e:
+            app.logger.error("RMAP get-link error ip=%s error=%s", _client_ip(), e)
             return jsonify({"error": f"rmap not available: {e}"}), 503
+        app.logger.info(
+            "RMAP get-link ok ip=%s identity=%s link=%s", _client_ip(), identity, expected_link
+        )
 
         doc_id = app.config.get("RMAP_DOCUMENT_ID")
         if not doc_id:
