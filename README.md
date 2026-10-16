@@ -31,7 +31,18 @@ python -m pip install -e ".[dev]"
 # Run the unit tests
 python -m pytest
 ```
+### Measure test coverage
 
+Some tests (the API findings tests in `test_api_findings.py`) need the running
+stack, so start the stack first, then run pytest with coverage. The HTML report
+is written to `artifacts/common/coverage/` (open `index.html`).
+
+    docker compose up -d --build
+    cd server
+    pip install pytest pytest-cov
+    TATOU_BASE=http://localhost:5000 PYTHONPATH=src python -m pytest test/ --cov=src --cov-report=html:../artifacts/common/coverage --cov-report=term-missing
+
+A specification-to-test mapping is in `artifacts/common/specification_test_mapping.html`.
 ### Deploy
 
 From the root of the directory:
