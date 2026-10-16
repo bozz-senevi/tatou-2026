@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Specification-to-Test Mapping — Tatou (Group 30)</title>
+<style>
+  :root{
+    --bg:#f6f7f5; --surface:#fff; --ink:#1b1f22; --muted:#5d6b6b; --line:#e2e6e2;
+    --accent:#1f7a4d; --accent-soft:#e7f3ec; --amber:#b4541f; --amber-soft:#fbf0e6;
+    --sans:system-ui,-apple-system,"Segoe UI",sans-serif; --mono:ui-monospace,Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0e1214; --surface:#161b1e; --ink:#eef2ef; --muted:#9aa8a6; --line:#273034;
+    --accent:#5fd08c; --accent-soft:#16271e; --amber:#e2925a; --amber-soft:#2a1f16;
+  }}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;
+    padding:40px max(16px,4vw) 64px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:1.7rem;margin:0 0 4px}
+  .sub{color:var(--muted);margin:0 0 4px}
+  .meta{color:var(--muted);font-family:var(--mono);font-size:.78rem;margin:0 0 24px}
+  h2{font-size:1.05rem;margin:30px 0 4px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .intro{color:var(--muted);font-size:.92rem;max-width:72ch;margin:4px 0 10px}
+  table{width:100%;border-collapse:collapse;font-size:.88rem;margin:10px 0 4px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+  td.id{font-family:var(--mono);color:var(--accent);white-space:nowrap;font-weight:600}
+  code{font-family:var(--mono);font-size:.82em;background:var(--accent-soft);padding:1px 5px;border-radius:4px}
+  .file{font-family:var(--mono);font-size:.78rem;color:var(--muted);white-space:nowrap}
+  .mode{font-family:var(--mono);font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;
+    padding:2px 7px;border-radius:999px;white-space:nowrap;border:1px solid var(--line)}
+  .mode.unit{background:var(--accent-soft);color:var(--accent)}
+  .mode.live{background:var(--amber-soft);color:var(--amber)}
+  .note{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0;padding:12px 16px;margin:18px 0;font-size:.9rem;color:var(--muted)}
+  .note b{color:var(--ink)}
+  footer{color:var(--muted);font-size:.82rem;margin-top:34px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Specification-to-Test Mapping</h1>
+  <p class="sub">Tatou PDF watermarking platform — Group 30, SOFTSEC VT2026</p>
+  <p class="meta">Traceability matrix · generated from <code>server/test/</code> on branch main</p>
+
+  <div class="note">
+    <b>How to read this.</b> Each row ties one requirement to the test(s) that verify it and the file they live in.
+    The <b>Run mode</b> column says how a test executes: <span class="mode unit">in-process</span> tests run with a
+    plain <code>pytest</code> (no server needed); <span class="mode live">live server</span> tests are black-box HTTP
+    tests that require the stack running (<code>docker compose up</code>) and skip cleanly when it is not reachable.
+  </div>
+
+  <h2>1 · Watermarking method interface</h2>
+  <p class="intro">Every method registered in <code>watermarking_utils.METHODS</code> must honour the common
+  interface declared in <code>watermarking_method.py</code>: correct return types, a working embed/read round-trip,
+  and only the declared exception types.</p>
+  <table>
+    <tr><th>ID</th><th>Specification</th><th>Verified by</th><th>File</th><th>Run mode</th></tr>
+    <tr><td class="id">S1</td><td><code>is_watermark_applicable</code> returns a bool for every registered method</td><td><code>test_is_watermark_applicable</code></td><td class="file">test_watermarking_all_methods.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S2</td><td><code>add_watermark</code> returns PDF bytes not smaller than the input and still starting with <code>%PDF-</code></td><td><code>test_add_watermark_and_shape</code></td><td class="file">test_watermarking_all_methods.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S3</td><td>A secret embedded by <code>add_watermark</code> reads back as a <code>str</code> (round-trip) for every method</td><td><code>test_read_secret_roundtrip</code>, <code>test_valid_roundtrip_still_works</code></td><td class="file">test_watermarking_all_methods.py, test_fuzz_findings.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S4</td><td>A wrong key is rejected with <code>InvalidKeyError</code></td><td><code>test_wrong_key_rejected</code></td><td class="file">test_iman_wm.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S5</td><td>An unmarked PDF raises <code>SecretNotFoundError</code></td><td><code>test_unmarked_pdf_has_no_secret</code></td><td class="file">test_iman_wm.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S6</td><td>On malformed input a method raises only the declared types (<code>ValueError</code>/<code>WatermarkingError</code>), never a raw library exception</td><td><code>test_bugB_add_watermark_wraps_exceptions</code> (sussann, iman, toy)</td><td class="file">test_fuzz_findings.py</td><td><span class="mode unit">in-process</span></td></tr>
+  </table>
+
+  <h2>2 · Fingerprinting (iman-wm)</h2>
+  <p class="intro">The fingerprinting method must embed a per-recipient mark that is reproducible, unique per secret,
+  and redundant enough to survive partial stripping.</p>
+  <table>
+    <tr><th>ID</th><th>Specification</th><th>Verified by</th><th>File</th><th>Run mode</th></tr>
+    <tr><td class="id">S7</td><td>Embedding is deterministic (same input and secret produce identical bytes)</td><td><code>test_deterministic</code></td><td class="file">test_iman_wm.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S8</td><td>Different secrets produce different output files (per-recipient uniqueness)</td><td><code>test_different_secrets_give_different_files</code></td><td class="file">test_iman_wm.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S9</td><td>The mark is recoverable after any one of its three locations (catalog, Info dict, page text) is removed</td><td><code>test_survives_removal_of_one_location</code></td><td class="file">test_iman_wm_redundancy.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S10</td><td>The mark is gone only once all locations are stripped</td><td><code>test_removing_both_locations_removes_the_mark</code></td><td class="file">test_iman_wm_redundancy.py</td><td><span class="mode unit">in-process</span></td></tr>
+  </table>
+
+  <h2>3 · Specialization A — fuzzing findings (regression guards)</h2>
+  <p class="intro">Each bug found by the fuzzing campaign is pinned by a test that fails on the original code and
+  passes once the fix is applied.</p>
+  <table>
+    <tr><th>ID</th><th>Specification / finding</th><th>Verified by</th><th>File</th><th>Run mode</th></tr>
+    <tr><td class="id">S11</td><td>Bug A — a secret containing control bytes survives the round-trip (sussann base64 fix)</td><td><code>test_bugA_sussann_preserves_control_bytes</code></td><td class="file">test_fuzz_findings.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S12</td><td>Bug B — methods wrap raw PyMuPDF errors as <code>WatermarkingError</code> (see S6)</td><td><code>test_bugB_add_watermark_wraps_exceptions</code></td><td class="file">test_fuzz_findings.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S13</td><td>C1 — a non-string <code>intended_for</code> no longer crashes create-watermark with a 500</td><td><code>test_C1_nonstring_intended_for_not_500</code></td><td class="file">test_api_findings.py</td><td><span class="mode live">live server</span></td></tr>
+    <tr><td class="id">S14</td><td>C2 — an empty secret or key returns 400, not 500</td><td><code>test_C2_empty_secret_not_500</code>, <code>test_C2_empty_key_not_500</code></td><td class="file">test_api_findings.py</td><td><span class="mode live">live server</span></td></tr>
+    <tr><td class="id">S15</td><td>C3 — database errors are not leaked verbatim to the client</td><td><code>test_C3_no_internal_error_leak</code></td><td class="file">test_api_findings.py</td><td><span class="mode live">live server</span></td></tr>
+  </table>
+
+  <h2>4 · Authentication and server</h2>
+  <table>
+    <tr><th>ID</th><th>Specification</th><th>Verified by</th><th>File</th><th>Run mode</th></tr>
+    <tr><td class="id">S16</td><td><code>/healthz</code> reports the server is up</td><td><code>test_healthz_route</code></td><td class="file">test_api.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S17</td><td>Login rejects requests missing email or password with 400</td><td><code>test_login_missing_credentials</code>, <code>test_login_missing_password</code></td><td class="file">test_api.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S18</td><td>Password check accepts the correct password and rejects a wrong password or unknown user</td><td><code>test_credentials_valid_correct_password</code>, <code>test_credentials_valid_wrong_password</code>, <code>test_credentials_valid_unknown_user</code></td><td class="file">test_api.py</td><td><span class="mode unit">in-process</span></td></tr>
+    <tr><td class="id">S19</td><td>The application factory builds a Flask app</td><td><code>test_create_app_initializes_flask</code></td><td class="file">test_api.py</td><td><span class="mode unit">in-process</span></td></tr>
+  </table>
+
+  <h2>5 · Access control (IDOR fix — flag_3 incident)</h2>
+  <table>
+    <tr><th>ID</th><th>Specification</th><th>Verified by</th><th>File</th><th>Run mode</th></tr>
+    <tr><td class="id">S20</td><td>Document lookups are scoped to the authenticated owner (<code>WHERE id = :id AND ownerid = :uid</code>), closing the IDOR</td><td><code>test_document_lookup_requires_owner</code></td><td class="file">test_api.py</td><td><span class="mode unit">in-process</span></td></tr>
+  </table>
+
+  <div class="note">
+    <b>Coverage note.</b> The <span class="mode unit">in-process</span> rows run with a plain <code>pytest</code> and are
+    reflected in the committed HTML coverage report. The <span class="mode live">live server</span> rows
+    (S13–S15) exercise <code>server.py</code> over HTTP and only contribute to coverage when the report is generated
+    with the stack running. See <code>COVERAGE_README.md</code> for the exact command.
+  </div>
+
+  <footer>Group 30 · SOFTSEC VT2026 · Tatou · specification-to-test traceability. Tests located under <code>server/test/</code>.</footer>
+</div>
+</body>
+</html>
