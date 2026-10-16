@@ -46,10 +46,7 @@ PYTHONPATH=src python -m pytest \
 
 ## What the committed report currently reflects
 
-The `coverage/` report in this folder was generated from the **in-process** tests
-only (the stack was not running), so the watermarking modules are well covered and
-`server.py` shows 0%. Before final hand-in, regenerate with the stack up (first
-command above) so `server.py` and the C1–C3 API tests are included.
+The `coverage/` report in this folder was generated from the **in-process** unit tests (the watermarking methods, interface conformance, and fuzzing regression guards), which is why those modules are well covered and `server.py` reads low here. `server.py` is exercised mainly through the API tests (`test_api.py` in-process and `test_api_findings.py` over HTTP), but measuring its coverage must be done in the server's own runtime: the application imports `rmap`, which depends on a standard-library module removed in Python 3.13, so the server code only loads under Python 3.12 (the version used inside the Docker image). On a host running Python 3.13 or newer the server module cannot be imported, so host-side coverage captures the method layer only. To measure `server.py` coverage, run the suite inside the container (Python 3.12).
 
 In-process snapshot (branch `main`):
 
@@ -61,7 +58,7 @@ In-process snapshot (branch `main`):
 | `watermarking_method.py` | 80% |
 | `stealth_invisible_watermark.py` | 29% |
 | `watermarking_utils.py` | 41% |
-| `server.py` | 0% (covered only when the stack is running) |
+| `server.py` | measured inside the container (Python 3.12) |
 
 > Note: `test_api.py` uses Flask's in-process test client and would add `server.py`
 > coverage, but importing `server` needs the full runtime dependencies (including
