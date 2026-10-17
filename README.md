@@ -66,6 +66,7 @@ python -m pip install -e ".[dev]"
 # Run the unit tests
 python -m pytest
 ```
+### Measure test coverage
 
 ### Measure test coverage
 

@@ -1,0 +1,5 @@
+    230 [ROUNDTRIP] sussann-watermark: wrote 'a\x00b\x01c' but read 'a·b·c'
+     17 [CRASH] sussann-watermark add_watermark -> FileDataError: Failed to open stream
+      3 [CRASH] sussann-watermark add_watermark -> FzErrorSyntax: code=8: invalid key in dict
+      3 [CRASH] iman-wm add_watermark -> FzErrorArgument: code=4: not a dict (null)
+      2 [CRASH] iman-wm add_watermark -> FzErrorFormat: code=7: malformed page tree
