@@ -16,15 +16,7 @@ MINIMAL_PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 
 @pytest.fixture
 def client():
-    c = app.test_client()
-    # These tests create real users/documents, so they need a live database.
-    # When none is reachable (e.g. the no-DB CI unit-test job), skip instead of
-    # failing — matching the pattern in test_document_routes.py. A reachable DB
-    # answers a bad-credential login with 400/401; an unreachable one gives 503.
-    probe = c.post("/api/login", json={"email": "x@y.z", "password": "nope"})
-    if probe.status_code == 503:
-        pytest.skip("database not reachable; skipping DB-backed access-control tests")
-    return c
+    return app.test_client()
 
 
 def _make_user(client):
