@@ -5,7 +5,7 @@
 # client: create a user, log in, upload a PDF, create a watermark, download the
 # watermarked version, list the available methods, and read the secret back.
 # These create real users/documents, so they need a reachable DB; each one
-# skips itself automatically if the database is not available.
+# fails if the database is not available.
 # ---------------------------------------------------------------------------
 import io
 import uuid
@@ -85,8 +85,7 @@ def test_wm_get_watermarking_methods(wm_client):
 
 def test_wm_create_and_read_watermark(wm_client):
     """upload -> create-watermark -> get-version -> re-upload -> read-watermark."""
-    if not _wm_db_available(wm_client):
-        pytest.skip("database not reachable")
+    assert _wm_db_available(wm_client), "database not reachable (start MariaDB, e.g. docker compose up db)"
 
     headers = _wm_auth_headers(wm_client)
     doc_id = _wm_upload(wm_client, headers, _WM_MINIMAL_PDF)
@@ -133,8 +132,7 @@ def test_wm_create_and_read_watermark(wm_client):
 
 def test_wm_read_watermark_wrong_key_is_rejected(wm_client):
     """A wrong key must not recover the secret."""
-    if not _wm_db_available(wm_client):
-        pytest.skip("database not reachable")
+    assert _wm_db_available(wm_client), "database not reachable (start MariaDB, e.g. docker compose up db)"
 
     headers = _wm_auth_headers(wm_client)
     doc_id = _wm_upload(wm_client, headers, _WM_MINIMAL_PDF)

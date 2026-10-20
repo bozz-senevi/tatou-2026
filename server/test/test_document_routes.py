@@ -4,7 +4,7 @@
 # Covers the document and version listing/retrieval/deletion routes end to end
 # through the Flask test client: list-documents, get-document, list-versions,
 # list-all-versions, and delete-document. These create real users and
-# documents, so each DB-backed test skips itself if no database is reachable.
+# documents, so they need a reachable database and fail if there is none.
 # ---------------------------------------------------------------------------
 import io
 import uuid
@@ -76,8 +76,7 @@ def test_doc_list_documents_requires_auth(doc_client):
 
 def test_doc_get_document_not_found(doc_client):
     """get-document for an id the caller does not own returns 404."""
-    if not _doc_db_available(doc_client):
-        pytest.skip("database not reachable")
+    assert _doc_db_available(doc_client), "database not reachable (start MariaDB, e.g. docker compose up db)"
 
     headers = _doc_auth_headers(doc_client)
     r = doc_client.get("/api/get-document/999999999", headers=headers)
@@ -86,8 +85,7 @@ def test_doc_get_document_not_found(doc_client):
 
 def test_doc_document_lifecycle(doc_client):
     """upload -> list -> get -> watermark -> list versions -> delete."""
-    if not _doc_db_available(doc_client):
-        pytest.skip("database not reachable")
+    assert _doc_db_available(doc_client), "database not reachable (start MariaDB, e.g. docker compose up db)"
 
     headers = _doc_auth_headers(doc_client)
     doc_id = _doc_upload(doc_client, headers)

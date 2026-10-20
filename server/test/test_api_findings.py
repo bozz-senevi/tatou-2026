@@ -4,7 +4,7 @@ Black-box HTTP tests: they call the RUNNING server and assert the correct
 behaviour. They do NOT modify server.py. They are expected to FAIL until the
 server.py fixes are applied, then pass - that is the non-regression guard.
 
-Requires a running server (docker compose up). Skips if it is unreachable.
+Requires a running server (docker compose up). Fails if it is unreachable.
 Run:  TATOU_BASE=http://localhost:5000 pytest -v test/test_api_findings.py
 """
 import os
@@ -26,8 +26,8 @@ MINIMAL_PDF = (
 def api():
     try:
         requests.get(f"{BASE}/healthz", timeout=5)
-    except Exception:
-        pytest.skip("Tatou server not reachable (start it with docker compose up)")
+    except Exception as exc:
+        pytest.fail(f"Tatou server not reachable at {BASE} (start it with docker compose up): {exc}")
     u = f"reg_{random.randint(0, 10**9)}"
     em = u + "@example.com"
     requests.post(f"{BASE}/api/create-user",
