@@ -22,6 +22,35 @@ jobs:
     defaults:
       run:
         working-directory: server
+    # The suite drives real routes end to end, so it needs a database (for the
+    # in-process Flask test client) and a running server (for the black-box
+    # HTTP tests in test_api_findings.py). No test is allowed to skip.
+    services:
+      db:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: tatou
+          MARIADB_USER: tatou
+          MARIADB_PASSWORD: tatou
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_NAME: tatou
+      DB_USER: tatou
+      DB_PASSWORD: tatou
+      SECRET_KEY: ci-secret-not-production
+      STORAGE_DIR: /tmp/tatou-storage
+      LOG_DIR: /tmp/tatou-logs
+      RATE_LIMIT_MAX: "0"   # tests create many users/logins from one IP
+      TATOU_BASE: http://127.0.0.1:5000
     steps:
       - uses: actions/checkout@v4
 
@@ -30,15 +59,49 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies (incl. RMAP git dep)
+      - name: Install dependencies (incl. RMAP git dep) and DB client
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+          sudo apt-get update && sudo apt-get install -y mariadb-client
 
-      - name: Run pytest
-        # Tests import `from server import app`; create_app() opens the DB
-        # lazily and healthz tolerates no DB, so no database is needed here.
-        run: pytest -q
+      - name: Load database schema
+        run: mariadb -h 127.0.0.1 -P 3306 -uroot -proot < ../db/tatou.sql
+
+      - name: Start the server (gunicorn, background)
+        run: |
+          mkdir -p "$STORAGE_DIR" "$LOG_DIR"
+          gunicorn -b 127.0.0.1:5000 server:app \
+            --access-logfile - --error-logfile - > /tmp/gunicorn.log 2>&1 &
+          echo $! > /tmp/gunicorn.pid
+
+      - name: Wait for healthz with DB connected
+        run: |
+          for i in $(seq 1 20); do
+            body=$(curl -s "$TATOU_BASE/healthz" || true)
+            echo "attempt $i: $body"
+            if echo "$body" | jq -e '.db_connected == true' >/dev/null 2>&1; then
+              echo "server healthy, DB connected"; exit 0
+            fi
+            sleep 2
+          done
+          echo "---- gunicorn log ----"; cat /tmp/gunicorn.log; exit 1
+
+      - name: Run pytest with coverage
+        run: pytest -q -rs --cov=src --cov-report=term-missing --cov-report=html
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: server/htmlcov
+
+      - name: Stop the server
+        if: always()
+        run: |
+          kill "$(cat /tmp/gunicorn.pid)" 2>/dev/null || true
+          echo "---- gunicorn log ----"; cat /tmp/gunicorn.log || true
 
   security:
     name: Security scan (advisory)

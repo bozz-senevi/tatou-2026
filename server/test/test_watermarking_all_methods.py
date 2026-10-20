@@ -18,20 +18,25 @@ for name, impl in (METHODS or {}).items():
     if not name == "UnsafeBashBridgeAppendEOF":
         CASES.append((str(name), impl))
 
-if not CASES:
-    pytest.skip("No watermarking methods registered in watermarking_utils.METHODS", allow_module_level=True)
+assert CASES, "No watermarking methods registered in watermarking_utils.METHODS"
 
 
 # --------- fixtures ----------
 @pytest.fixture(scope="session")
 def sample_pdf_path(tmp_path_factory) -> Path:
-    """Minimal but recognizable PDF bytes."""
+    """A small but valid one-page PDF.
+
+    It needs at least one page: the PyMuPDF-based methods (iman-wm,
+    stealth-invisible, sussann-watermark) correctly refuse a page-less PDF.
+    """
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page()
+    doc[0].insert_text((72, 72), "sample")
     pdf = tmp_path_factory.mktemp("pdfs") / "sample.pdf"
-    pdf.write_bytes(
-        b"%PDF-1.4\n"
-        b"1 0 obj\n<< /Type /Catalog >>\nendobj\n"
-        b"%%EOF\n"
-    )
+    pdf.write_bytes(doc.tobytes())
+    doc.close()
     return pdf
 
 @pytest.fixture(scope="session")
@@ -57,13 +62,12 @@ class TestAllWatermarkingMethods:
         wm_impl = _as_instance(impl)
         ok = wm_impl.is_watermark_applicable(sample_pdf_path, position=None)
         assert isinstance(ok, bool), f"{method_name}: is_watermark_applicable must return bool"
-        if not ok:
-            pytest.skip(f"{method_name}: not applicable to the sample PDF")
+        assert ok, f"{method_name}: should be applicable to the sample PDF"
 
     def test_add_watermark_and_shape(self, method_name: str, impl: object, sample_pdf_path: Path, secret: str, key: str):
         wm_impl = _as_instance(impl)
-        if not wm_impl.is_watermark_applicable(sample_pdf_path, position=None):
-            pytest.skip(f"{method_name}: not applicable to the sample PDF")
+        assert wm_impl.is_watermark_applicable(sample_pdf_path, position=None), \
+            f"{method_name}: should be applicable to the sample PDF"
         original = sample_pdf_path.read_bytes()
         out_bytes = wm_impl.add_watermark(sample_pdf_path, secret=secret, key=key, position=None)
         assert isinstance(out_bytes, (bytes, bytearray)), f"{method_name}: add_watermark must return bytes"
@@ -72,8 +76,8 @@ class TestAllWatermarkingMethods:
 
     def test_read_secret_roundtrip(self, method_name: str, impl: object, sample_pdf_path: Path, secret: str, key: str, tmp_path: Path):
         wm_impl = _as_instance(impl)
-        if not wm_impl.is_watermark_applicable(sample_pdf_path, position=None):
-            pytest.skip(f"{method_name}: not applicable to the sample PDF")
+        assert wm_impl.is_watermark_applicable(sample_pdf_path, position=None), \
+            f"{method_name}: should be applicable to the sample PDF"
         out_pdf = tmp_path / f"{method_name}_watermarked.pdf"
         out_pdf.write_bytes(wm_impl.add_watermark(sample_pdf_path, secret=secret, key=key, position=None))
         extracted = wm_impl.read_secret(out_pdf, key=key)
