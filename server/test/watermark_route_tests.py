@@ -59,9 +59,9 @@ def _wm_auth_headers(client):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _wm_upload_pdf(client, headers):
-    """Upload the minimal PDF and return its document id."""
-    data = {"file": (io.BytesIO(_WM_MINIMAL_PDF), "sample.pdf")}
+def _wm_upload(client, headers, pdf_bytes, filename="sample.pdf"):
+    """Upload PDF bytes and return the new document id."""
+    data = {"file": (io.BytesIO(pdf_bytes), filename)}
     r = client.post(
         "/api/upload-document",
         headers=headers,
@@ -84,17 +84,17 @@ def test_wm_get_watermarking_methods(wm_client):
 
 
 def test_wm_create_and_read_watermark(wm_client):
-    """upload -> create-watermark -> get-version -> read-watermark round-trip."""
+    """upload -> create-watermark -> get-version -> re-upload -> read-watermark."""
     if not _wm_db_available(wm_client):
         pytest.skip("database not reachable")
 
     headers = _wm_auth_headers(wm_client)
-    doc_id = _wm_upload_pdf(wm_client, headers)
+    doc_id = _wm_upload(wm_client, headers, _WM_MINIMAL_PDF)
 
     secret = "top-secret-42"
     key = "correct horse battery staple"
 
-    # create-watermark
+    # create-watermark: writes a separate watermarked version, returns its link
     r = wm_client.post(
         f"/api/create-watermark/{doc_id}",
         headers=headers,
@@ -111,14 +111,19 @@ def test_wm_create_and_read_watermark(wm_client):
     link = created["link"]
     assert link
 
-    # get-version: the watermarked PDF is downloadable via its link token
+    # get-version: download the watermarked PDF via its link token
     r = wm_client.get(f"/api/get-version/{link}")
     assert r.status_code == 200
-    assert r.data.startswith(b"%PDF-")
+    watermarked = r.data
+    assert watermarked.startswith(b"%PDF-")
+
+    # The watermark lives in the version file, not the original document, so
+    # upload the watermarked bytes as a new document and read the secret back.
+    wm_doc_id = _wm_upload(wm_client, headers, watermarked, "watermarked.pdf")
 
     # read-watermark: the secret round-trips with the correct key
     r = wm_client.post(
-        f"/api/read-watermark/{doc_id}",
+        f"/api/read-watermark/{wm_doc_id}",
         headers=headers,
         json={"method": "toy-eof", "key": key},
     )
@@ -132,7 +137,7 @@ def test_wm_read_watermark_wrong_key_is_rejected(wm_client):
         pytest.skip("database not reachable")
 
     headers = _wm_auth_headers(wm_client)
-    doc_id = _wm_upload_pdf(wm_client, headers)
+    doc_id = _wm_upload(wm_client, headers, _WM_MINIMAL_PDF)
 
     r = wm_client.post(
         f"/api/create-watermark/{doc_id}",
@@ -145,10 +150,15 @@ def test_wm_read_watermark_wrong_key_is_rejected(wm_client):
         },
     )
     assert r.status_code == 201, r.get_data(as_text=True)
+    link = r.get_json()["link"]
+
+    r = wm_client.get(f"/api/get-version/{link}")
+    assert r.status_code == 200
+    wm_doc_id = _wm_upload(wm_client, headers, r.data, "watermarked.pdf")
 
     # Wrong key fails authentication; the route maps that to a 400 error.
     r = wm_client.post(
-        f"/api/read-watermark/{doc_id}",
+        f"/api/read-watermark/{wm_doc_id}",
         headers=headers,
         json={"method": "toy-eof", "key": "the-wrong-key"},
     )
